@@ -6,7 +6,85 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from typing import Dict, Any, Optional, List
 
-from ..database import activities_collection, teachers_collection
+from ..database import activities_collection, teachers_collection, announcements_collection
+from fastapi import Body
+from datetime import datetime
+# Announcement Endpoints
+@router.get("/announcements", response_model=List[Dict[str, Any]])
+def get_announcements():
+    """Get all announcements (for management dialog)"""
+    return [
+        {**a, "_id": str(a.get("_id", ""))} for a in announcements_collection.find({})
+    ]
+
+@router.get("/active-announcements", response_model=List[Dict[str, Any]])
+def get_active_announcements():
+    """Get currently active announcements (for banner)"""
+    now = datetime.now().isoformat()
+    query = {"expiration_date": {"$gte": now}}
+    return [
+        {**a, "_id": str(a.get("_id", ""))}
+        for a in announcements_collection.find(query)
+        if (not a.get("start_date") or a["start_date"] <= now)
+    ]
+
+@router.post("/announcements", response_model=Dict[str, Any])
+def add_announcement(
+    message: str = Body(...),
+    expiration_date: str = Body(...),
+    start_date: str = Body(None),
+    created_by: str = Body(...)
+):
+    """Add a new announcement (signed-in users only)"""
+    if not created_by:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not expiration_date:
+        raise HTTPException(status_code=400, detail="Expiration date required")
+    ann = {
+        "message": message,
+        "expiration_date": expiration_date,
+        "start_date": start_date,
+        "created_by": created_by,
+        "created_at": datetime.now().isoformat()
+    }
+    result = announcements_collection.insert_one(ann)
+    ann["_id"] = str(result.inserted_id)
+    return ann
+
+@router.put("/announcements/{announcement_id}", response_model=Dict[str, Any])
+def update_announcement(
+    announcement_id: str,
+    message: str = Body(...),
+    expiration_date: str = Body(...),
+    start_date: str = Body(None),
+    updated_by: str = Body(...)
+):
+    """Update an announcement (signed-in users only)"""
+    if not updated_by:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    update = {
+        "message": message,
+        "expiration_date": expiration_date,
+        "start_date": start_date,
+        "updated_by": updated_by,
+        "updated_at": datetime.now().isoformat()
+    }
+    result = announcements_collection.update_one({"_id": announcement_id}, {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    ann = announcements_collection.find_one({"_id": announcement_id})
+    ann["_id"] = str(ann["_id"])
+    return ann
+
+@router.delete("/announcements/{announcement_id}")
+def delete_announcement(announcement_id: str, deleted_by: str = Body(...)):
+    """Delete an announcement (signed-in users only)"""
+    if not deleted_by:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    result = announcements_collection.delete_one({"_id": announcement_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    return {"message": "Announcement deleted", "id": announcement_id}
 
 router = APIRouter(
     prefix="/activities",
